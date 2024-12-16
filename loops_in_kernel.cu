@@ -56,10 +56,8 @@ __global__ void computeHistogramDD(unsigned int *d_histDD, float *ra_real, float
             int bin = (int) (theta * binsperdegree);
     
             atomicAdd(&d_histDD[bin], 1);
-        }
-        
-    }
-    
+        }  
+    }   
 }
 
 __global__ void computeHistogramRR(unsigned int *d_histRR, float *ra_sim, float *decl_sim, int *d_NoofSim) 

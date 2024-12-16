@@ -21,7 +21,7 @@ int NoofSim;
 unsigned int *histogramDR, *histogramDD, *histogramRR;
 unsigned int *d_histogram;
 
-float *omega;
+double *omega;
 
 
 
@@ -46,12 +46,12 @@ __device__ float angular_distance(float ra_1, float decl_1, float ra_2, float de
 
 __global__ void computeHistogramDD(unsigned int *d_histDD, float *ra_real, float *decl_real, int *d_NoofReal) 
 {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int NoofReal = *d_NoofReal;
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    long NoofReal = *d_NoofReal;
 
     if (idx < NoofReal*NoofReal) {
-        int i = idx / NoofReal;
-        int j = idx % NoofReal;
+        long i = idx / NoofReal;
+        long j = idx % NoofReal;
         float theta_rad = angular_distance(ra_real[i], decl_real[i], ra_real[j], decl_real[j]);
         float theta = theta_rad * 180.0 / acos(-1.0);
         int bin = (int) (theta * binsperdegree);
@@ -64,12 +64,12 @@ __global__ void computeHistogramDD(unsigned int *d_histDD, float *ra_real, float
 
 __global__ void computeHistogramRR(unsigned int *d_histRR, float *ra_sim, float *decl_sim, int *d_NoofSim) 
 {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int NoofSim = *d_NoofSim;
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    long NoofSim = *d_NoofSim;
 
     if (idx < NoofSim*NoofSim) {
-        int i = idx / NoofSim;
-        int j = idx % NoofSim;
+        long i = idx / NoofSim;
+        long j = idx % NoofSim;
         float theta_rad = angular_distance(ra_sim[i], decl_sim[i], ra_sim[j], decl_sim[j]);
         float theta = theta_rad * 180.0 / acos(-1.0);
         int bin = (int) (theta * binsperdegree);
@@ -80,13 +80,13 @@ __global__ void computeHistogramRR(unsigned int *d_histRR, float *ra_sim, float 
 __global__ void computeHistogramDR(unsigned int *d_histDR, float *ra_sim, float *decl_sim, float *ra_real, float *decl_real,
                                     int *d_NoofSim, int *d_NoofReal) 
 {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int NoofReal = *d_NoofReal;
-    int NoofSim = *d_NoofSim;
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    long NoofReal = *d_NoofReal;
+    long NoofSim = *d_NoofSim;
 
     if (idx < NoofSim*NoofReal) {
-        int i = idx / NoofReal;
-        int j = idx % NoofSim;
+        long i = idx / NoofReal;
+        long j = idx % NoofSim;
         float theta_rad = angular_distance(ra_real[i], decl_real[i], ra_sim[j], decl_sim[j]);
         float theta = theta_rad * 180.0 / acos(-1.0);
         int bin = (int) (theta * binsperdegree);
@@ -121,7 +121,7 @@ int main(int argc, char *argv[])
     histogramDD = (unsigned int *)calloc(totaldegrees*binsperdegree, sizeof(unsigned int));
     histogramRR = (unsigned int *)calloc(totaldegrees*binsperdegree, sizeof(unsigned int));
     
-    omega = (float *)calloc(totaldegrees*binsperdegree, sizeof(float));
+    omega = (double *)calloc(totaldegrees*binsperdegree, sizeof(double));
 
 
    // allocate memory on the GPU
@@ -154,7 +154,7 @@ int main(int argc, char *argv[])
     cudaMemset(d_histDD, 0, totaldegrees*binsperdegree*sizeof(unsigned int));
     cudaMemset(d_histRR, 0, totaldegrees*binsperdegree*sizeof(unsigned int));
 
-    int total_threads = NoofReal * NoofReal;
+    long total_threads = (long)NoofReal * NoofReal;
     int blocks = (total_threads + threadsperblock - 1) / threadsperblock;
 
     kerneltime = 0.0;
@@ -172,20 +172,20 @@ int main(int argc, char *argv[])
     cudaDeviceSynchronize();
     
     computeHistogramRR<<<blocks, threadsperblock>>>(d_histRR, d_ra_sim, d_decl_sim, d_NoofSim);
-    cudaDeviceSynchronize();
     myError = cudaGetLastError();
     if ( myError != cudaSuccess ) {
         printf("CUDA error RR: %s\n", cudaGetErrorString(myError));
         return(-1);
     }
+    cudaDeviceSynchronize();
 
     computeHistogramDR<<<blocks, threadsperblock>>>(d_histDR, d_ra_sim, d_decl_sim, d_ra_real, d_decl_real, d_NoofSim, d_NoofReal);
-    cudaDeviceSynchronize();
     myError = cudaGetLastError();
     if ( myError != cudaSuccess ) {
         printf("CUDA error DR: %s\n", cudaGetErrorString(myError));
         return(-1);
     }
+    cudaDeviceSynchronize();
 
     cudaMemcpy(histogramDD, d_histDD, totaldegrees*binsperdegree*sizeof(unsigned int), cudaMemcpyDeviceToHost);
     cudaMemcpy(histogramRR, d_histRR, totaldegrees*binsperdegree*sizeof(unsigned int), cudaMemcpyDeviceToHost);
@@ -218,7 +218,7 @@ int main(int argc, char *argv[])
     outfil = fopen(argv[3],"w");
     if ( outfil == NULL ) {printf("Cannot open output file %s\n",argv[3]);return(-1);}
     // write omega to the output file
-    for (i=0; i<totaldegrees*binsperdegree; i++) fprintf(outfil,"%u %u %u %f\n", histogramDD[i], histogramRR[i], histogramDR[i], omega[i]);
+    for (i=0; i<totaldegrees*binsperdegree; i++) fprintf(outfil,"%u %u %u %lf\n", histogramDD[i], histogramRR[i], histogramDR[i], omega[i]);
 
     // Free memory
     cudaFree(d_histRR);
@@ -394,7 +394,7 @@ void compute_omega(){
             omega[i] = 0;
         }
         else { 
-            omega[i] = (float)(histogramDD[i] - 2*histogramDR[i] + histogramRR[i]) / (float)histogramRR[i];
+            omega[i] = (double)((double)histogramDD[i] - 2*(double)histogramDR[i] + (double)histogramRR[i]) / (double)histogramRR[i];
         }
     }
 }
