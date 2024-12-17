@@ -52,11 +52,12 @@ __global__ void computeHistogramDD(unsigned int *d_histDD, float *ra_real, float
     if (idx < NoofReal*NoofReal) {
         long i = idx / NoofReal;
         long j = idx % NoofReal;
-        float theta_rad = angular_distance(ra_real[i], decl_real[i], ra_real[j], decl_real[j]);
-        float theta = theta_rad * 180.0 / acos(-1.0);
-        int bin = (int) (theta * binsperdegree);
- 
-        atomicAdd(&d_histDD[bin], 1);
+        if (j>=i) {
+            float theta_rad = angular_distance(ra_real[i], decl_real[i], ra_real[j], decl_real[j]);
+            float theta = theta_rad * 180.0 / acos(-1.0);
+            int bin = (int) (theta * binsperdegree);
+            atomicAdd(&d_histDD[bin], (i==j) ? 1 : 2);
+        }
         
     }
     
@@ -70,10 +71,12 @@ __global__ void computeHistogramRR(unsigned int *d_histRR, float *ra_sim, float 
     if (idx < NoofSim*NoofSim) {
         long i = idx / NoofSim;
         long j = idx % NoofSim;
-        float theta_rad = angular_distance(ra_sim[i], decl_sim[i], ra_sim[j], decl_sim[j]);
-        float theta = theta_rad * 180.0 / acos(-1.0);
-        int bin = (int) (theta * binsperdegree);
-        atomicAdd(&d_histRR[bin], 1);
+        if (j>=i) {
+            float theta_rad = angular_distance(ra_sim[i], decl_sim[i], ra_sim[j], decl_sim[j]);
+            float theta = theta_rad * 180.0 / acos(-1.0);
+            int bin = (int) (theta * binsperdegree);
+            atomicAdd(&d_histRR[bin], (i==j) ? 1 : 2);
+        }
     }
 }
 
@@ -109,6 +112,10 @@ int main(int argc, char *argv[])
    void compute_omega();
 
    FILE *outfil;
+
+    // kerneltime = 0.0;
+    // gettimeofday(&_ttime, &_tzone);
+    // start = (double)_ttime.tv_sec + (double)_ttime.tv_usec/1000000.;
 
    if ( argc != 4 ) {printf("Usage: a.out real_data random_data output_data\n");return(-1);}
 
@@ -157,39 +164,45 @@ int main(int argc, char *argv[])
     long total_threads = (long)NoofReal * NoofReal;
     int blocks = (total_threads + threadsperblock - 1) / threadsperblock;
 
+    cudaStream_t streamDD, streamRR, streamDR;
+    cudaStreamCreate(&streamDD);
+    cudaStreamCreate(&streamRR);
+    cudaStreamCreate(&streamDR);
+
     kerneltime = 0.0;
     gettimeofday(&_ttime, &_tzone);
     start = (double)_ttime.tv_sec + (double)_ttime.tv_usec/1000000.;
 
 // run your kernel here
 
-    computeHistogramDD<<<blocks, threadsperblock>>>(d_histDD, d_ra_real, d_decl_real, d_NoofReal);
+    computeHistogramDD<<<blocks, threadsperblock, 0, streamDD>>>(d_histDD, d_ra_real, d_decl_real, d_NoofReal);
     myError = cudaGetLastError();
     if ( myError != cudaSuccess ) {
         printf("CUDA error DD: %s\n", cudaGetErrorString(myError));
         return(-1);
-    }
-    cudaDeviceSynchronize();
+    }    
     
-    computeHistogramRR<<<blocks, threadsperblock>>>(d_histRR, d_ra_sim, d_decl_sim, d_NoofSim);
+    computeHistogramRR<<<blocks, threadsperblock, 0, streamRR>>>(d_histRR, d_ra_sim, d_decl_sim, d_NoofSim);
     myError = cudaGetLastError();
     if ( myError != cudaSuccess ) {
         printf("CUDA error RR: %s\n", cudaGetErrorString(myError));
         return(-1);
     }
-    cudaDeviceSynchronize();
 
-    computeHistogramDR<<<blocks, threadsperblock>>>(d_histDR, d_ra_sim, d_decl_sim, d_ra_real, d_decl_real, d_NoofSim, d_NoofReal);
+    computeHistogramDR<<<blocks, threadsperblock, 0, streamDR>>>(d_histDR, d_ra_sim, d_decl_sim, d_ra_real, d_decl_real, d_NoofSim, d_NoofReal);
     myError = cudaGetLastError();
     if ( myError != cudaSuccess ) {
         printf("CUDA error DR: %s\n", cudaGetErrorString(myError));
         return(-1);
     }
-    cudaDeviceSynchronize();
 
-    cudaMemcpy(histogramDD, d_histDD, totaldegrees*binsperdegree*sizeof(unsigned int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(histogramRR, d_histRR, totaldegrees*binsperdegree*sizeof(unsigned int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(histogramDR, d_histDR, totaldegrees*binsperdegree*sizeof(unsigned int), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(histogramDD, d_histDD, totaldegrees*binsperdegree*sizeof(unsigned int), cudaMemcpyDeviceToHost, streamDD);
+    cudaMemcpyAsync(histogramRR, d_histRR, totaldegrees*binsperdegree*sizeof(unsigned int), cudaMemcpyDeviceToHost, streamRR);
+    cudaMemcpyAsync(histogramDR, d_histDR, totaldegrees*binsperdegree*sizeof(unsigned int), cudaMemcpyDeviceToHost, streamDR);
+
+    cudaStreamSynchronize(streamDD);
+    cudaStreamSynchronize(streamRR);
+    cudaStreamSynchronize(streamDR);
     
     myError = cudaGetLastError();
     if ( myError != cudaSuccess ) {
@@ -213,7 +226,6 @@ int main(int argc, char *argv[])
     kerneltime += end-start;
     printf("   Run time = %.lf secs\n",kerneltime);
 
-
     printf("   Writing output to %s\n",argv[3]);
     outfil = fopen(argv[3],"w");
     if ( outfil == NULL ) {printf("Cannot open output file %s\n",argv[3]);return(-1);}
@@ -233,6 +245,15 @@ int main(int argc, char *argv[])
     free(histogramRR);
     free(histogramDR);
     free(histogramDD);
+
+    cudaStreamDestroy(streamDD);
+    cudaStreamDestroy(streamRR);
+    cudaStreamDestroy(streamDR);
+
+    // gettimeofday(&_ttime, &_tzone);
+    // end = (double)_ttime.tv_sec + (double)_ttime.tv_usec/1000000.;
+    // kerneltime += end-start;
+    // printf("   Run time = %.lf secs\n",kerneltime);
 
     return(0);
 }
